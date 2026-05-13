@@ -1,0 +1,663 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Katamino Tower 3D</title>
+    <style>
+        * { margin: 0; padding: 0; }
+        body { overflow: hidden; background: #f0ebe3; font-family: system-ui, sans-serif; }
+        #ui { position: absolute; top: 10px; left: 10px; z-index: 999; display: flex; gap: 8px; align-items: center; }
+        #ui button { padding: 8px 16px; background: #4285F4; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 14px; }
+        #ui button:disabled { background: #999; cursor: default; }
+        #hint { position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%); z-index: 999;
+                 background: rgba(0,0,0,0.6); color: #fff; padding: 8px 18px; border-radius: 20px; font-size: 13px; pointer-events: none; }
+        #label-tooltip { position: absolute; display: none; background: rgba(0,0,0,0.85); color: #fff;
+                 padding: 4px 12px; border-radius: 4px; font: bold 14px system-ui, sans-serif;
+                 pointer-events: none; user-select: none; z-index: 100;
+                 transform: translate(-50%, -100%); margin-top: -10px; }
+
+        .github-corner { position: fixed; top: 0; right: 0; z-index: 1000; }
+        .github-corner svg { color: #fff; fill: #c4a882; width: 80px; height: 80px; }
+        .github-corner .octo-arm { transform-origin: 130px 106px; }
+        .github-corner:hover .octo-arm { animation: octocat-wave 560ms ease-in-out; }
+        @keyframes octocat-wave { 0%,100%{transform:rotate(0)} 20%,60%{transform:rotate(-25deg)} 40%,80%{transform:rotate(10deg)} }
+    </style>
+</head>
+<body>
+<div id="ui">
+    <button id="auto-solve">算法求解</button>
+    <button id="reset">重置</button>
+</div>
+<div id="hint">🖱 拖拽积木 · R 翻转</div>
+<div id="label-tooltip"></div>
+
+<a class="github-corner" href="https://github.com/niyongsheng/katamino-tower" target="_blank" aria-label="View source on GitHub">
+    <svg aria-hidden="true" width="80" height="80" viewBox="0 0 250 250">
+        <path d="M0,0 L115,115 L130,115 L142,142 L250,250 L250,0 Z"/>
+        <path class="octo-arm" d="M128.3,109.0 C113.8,99.7 119.0,89.6 119.0,89.6 C122.0,82.7 120.5,78.6 120.5,78.6 C119.2,72.0 123.4,76.3 123.4,76.3 C127.3,80.9 125.5,87.3 125.5,87.3 C122.9,97.6 130.6,101.9 134.4,103.2" fill="currentColor"/>
+        <path class="octo-body" d="M115.0,115.0 C114.9,115.1 118.7,116.5 119.8,115.4 L133.7,101.6 C136.9,99.2 139.9,98.4 142.2,98.6 C133.8,88.0 127.5,74.4 143.8,58.0 C148.5,53.4 154.0,51.2 159.7,51.0 C160.3,49.4 163.2,43.6 171.4,40.1 C171.4,40.1 176.1,42.5 178.8,56.2 C183.1,58.6 187.2,61.8 190.9,65.4 C194.5,69.0 197.7,73.2 200.1,77.6 C213.8,80.2 216.3,84.9 216.3,84.9 C212.7,93.1 206.9,96.0 205.4,96.6 C205.1,102.4 203.0,107.8 198.3,112.5 C181.9,128.9 168.3,122.5 157.7,114.1 C157.9,116.9 156.7,120.9 152.7,124.9 L141.0,136.5 C139.8,137.7 141.6,141.9 141.8,141.8 Z" fill="currentColor"/>
+    </svg>
+</a>
+
+<script type="importmap">
+{
+    "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+    }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { DragControls } from 'three/addons/controls/DragControls.js';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+
+// ─── 参数 ──────────────────────────────────────────────────────
+const COLS = 12;           // 每层列数（每列 30°）
+const LAYERS = 5;          // 层数
+const COL_ANGLE = 30;      // 每列角度
+const INNER_R = 1.2;       // 内径（ring 块）
+const OUTER_R = 2.8;       // 外径（pentomino 块）
+const LAYER_H = 1.1;       // 每层高度
+const ARC_SEG = 8;         // 弧面分段数
+const COL_ANGLE_RAD = THREE.MathUtils.degToRad(COL_ANGLE);
+
+// ─── 场景 ──────────────────────────────────────────────────────
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0xf0ebe3);
+
+const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 1000);
+camera.position.set(10, 8, 12);
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.2;
+document.body.appendChild(renderer.domElement);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.dampingFactor = 0.08;
+controls.minDistance = 6;
+controls.maxDistance = 25;
+controls.target.set(0, 2.5, 0);
+
+// ─── 灯光 ──────────────────────────────────────────────────────
+const light = new THREE.DirectionalLight(0xffffff, 1.5);
+light.position.set(10, 20, 10);
+light.castShadow = true;
+light.shadow.mapSize.width = 512;
+light.shadow.mapSize.height = 512;
+light.shadow.camera.near = 1;
+light.shadow.camera.far = 30;
+light.shadow.camera.left = -12;
+light.shadow.camera.right = 12;
+light.shadow.camera.top = 12;
+light.shadow.camera.bottom = -12;
+scene.add(light);
+scene.add(new THREE.AmbientLight(0xffffff, 0.5));
+const backLight = new THREE.DirectionalLight(0xffffff, 0.4);
+backLight.position.set(-5, 5, -10);
+scene.add(backLight);
+
+// ─── 底座 ──────────────────────────────────────────────────────
+const baseMat = new THREE.MeshLambertMaterial({ color: 0xc4a882 });
+const base = new THREE.Mesh(new THREE.CylinderGeometry(OUTER_R + 0.5, OUTER_R + 0.5, 0.6, 48), baseMat);
+base.position.y = -0.3;
+base.receiveShadow = true;
+scene.add(base);
+
+// 底座上的定位环
+const ringGuide = new THREE.Mesh(
+    new THREE.RingGeometry(INNER_R - 0.1, OUTER_R + 0.1, 48),
+    new THREE.MeshBasicMaterial({ color: 0xd5c4a1, side: THREE.DoubleSide, transparent: true, opacity: 0.3 })
+);
+ringGuide.rotation.x = -Math.PI / 2;
+ringGuide.position.y = 0.01;
+scene.add(ringGuide);
+
+// 立柱
+const pillarMat = new THREE.MeshLambertMaterial({ color: 0xf5deb3 });
+const pillar = new THREE.Mesh(new THREE.CylinderGeometry(0.4, 0.4, LAYERS * LAYER_H, 16), pillarMat);
+pillar.position.y = LAYERS * LAYER_H / 2;
+scene.add(pillar);
+
+// ─── 弧形块几何体 ──────────────────────────────────────────────
+function createArcBlock(innerR, outerR, height, seg) {
+    const s = seg || ARC_SEG;
+    const aLen = Math.PI / 6; // 30°
+    const shape = new THREE.Shape();
+    shape.moveTo(outerR, 0);
+    shape.absarc(0, 0, outerR, 0, aLen, false);
+    shape.lineTo(innerR * Math.cos(aLen), innerR * Math.sin(aLen));
+    shape.absarc(0, 0, innerR, aLen, 0, true);
+    const geo = new THREE.ExtrudeGeometry(shape, { depth: height, bevelEnabled: false });
+    geo.rotateX(-Math.PI / 2);
+    geo.translate(0, -height / 2, 0);
+    return geo;
+}
+
+// 缓存弧形块几何体（内径/外径各一个）
+const arcBlockOuterGeo = createArcBlock(INNER_R, OUTER_R, LAYER_H);
+// 用于 ring 的内环（孔径匹配立柱半径 0.4）
+const arcBlockRingGeo = createArcBlock(0.4, INNER_R + 0.3, LAYER_H);
+
+// ─── 积木配置 ─────────────────────────────────────────────────
+const PIECES = [
+  {c:0x3498db, ring:true, outerCols:[0,1]},  {c:0x3498db, s:"I"},  {c:0x3498db, s:"L"},
+  {c:0xe74c3c, ring:true, outerCols:[1,3]},  {c:0xe74c3c, s:"S"},  {c:0xe74c3c, s:"T"},
+  {c:0xe84393, ring:true, outerCols:[2,5]},  {c:0xe84393, s:"F"},  {c:0xe84393, s:"W"},
+  {c:0x2ecc71, ring:true, outerCols:[3,7]},  {c:0x2ecc71, s:"Q"},  {c:0x2ecc71, s:"U"},
+  {c:0xf1c40f, ring:true, outerCols:[4,9]},  {c:0xf1c40f, s:"N"},  {c:0xf1c40f, s:"Y"},
+];
+
+function getShape(s) {
+    switch(s) {
+        case "I": return [[0,0],[1,0],[2,0],[3,0],[4,0]];
+        case "L": return [[3,1],[0,2],[1,2],[2,2],[3,2]];
+        case "S": return [[1,0],[2,0],[1,1],[0,2],[1,2]];
+        case "T": return [[0,0],[1,0],[2,0],[1,1],[1,2]];
+        case "F": return [[1,0],[0,1],[1,1],[2,1],[0,2]];
+        case "W": return [[2,0],[1,1],[2,1],[0,2],[1,2]];
+        case "Q": return [[1,1],[2,1],[0,2],[1,2],[2,2]];
+        case "U": return [[0,1],[2,1],[0,2],[1,2],[2,2]];
+        case "N": return [[2,1],[3,1],[0,2],[1,2],[2,2]];
+        case "Y": return [[2,1],[0,2],[1,2],[2,2],[3,2]];
+        case "V": return [[0,0],[1,0],[2,0],[0,1],[0,2]];
+        case "Z": return [[0,0],[1,0],[2,0],[2,1],[3,1]];
+        default: return [];
+    }
+}
+
+// ─── 网格系统 ─────────────────────────────────────────────────
+const innerGrid = {}; // "col_layer" → piece
+const outerGrid = {};
+
+function gk(col, layer) {
+    return `${((col % COLS) + COLS) % COLS}_${layer}`;
+}
+
+function occupy(grid, piece, shape, baseCol, baseLayer) {
+    shape.forEach(([x, y]) => {
+        grid[gk(baseCol + x, baseLayer + y)] = piece;
+    });
+}
+
+function vacate(grid, piece) {
+    for (const key in grid) {
+        if (grid[key] === piece) delete grid[key];
+    }
+}
+
+
+
+function rebuildPieceMesh(group, shape, cx, cy) {
+    const mesh = group.children.find(c => c.isMesh);
+    const geoms = shape.map(([x, y]) => {
+        const g = arcBlockOuterGeo.clone();
+        g.rotateY((x - cx) * COL_ANGLE_RAD);
+        g.translate(0, (y - cy) * LAYER_H, 0);
+        return g;
+    });
+    const merged = mergeGeometries(geoms, false);
+    mesh.geometry.dispose();
+    mesh.geometry = merged;
+}
+
+// ─── 创建积木 ─────────────────────────────────────────────────
+const draggable = [];
+const originPos = [];
+
+function flipShape180(shape) {
+    const xs = shape.map(v => v[0]), ys = shape.map(v => v[1]);
+    const cx = (Math.min(...xs) + Math.max(...xs)) / 2;
+    const cy = (Math.min(...ys) + Math.max(...ys)) / 2;
+    return shape.map(([x, y]) => [2 * cx - x, 2 * cy - y]);
+}
+
+function computeShapeCenter(shape) {
+    const xs = shape.map(v => v[0]), ys = shape.map(v => v[1]);
+    return {
+        cx: (Math.min(...xs) + Math.max(...xs)) / 2,
+        cy: (Math.min(...ys) + Math.max(...ys)) / 2,
+        maxY: Math.max(...ys),
+    };
+}
+
+function createPiece(p, index) {
+    const mat = new THREE.MeshLambertMaterial({ color: p.c });
+
+    if (p.ring) {
+        const allGeoms = [];
+        for (let col = 0; col < 12; col++) {
+            const g = arcBlockRingGeo.clone();
+            g.rotateY(col * COL_ANGLE_RAD);
+            allGeoms.push(g);
+        }
+        // 外圆弧块
+        if (p.outerCols) {
+            for (const col of p.outerCols) {
+                const g = arcBlockOuterGeo.clone();
+                g.rotateY(col * COL_ANGLE_RAD);
+                allGeoms.push(g);
+            }
+        }
+        const merged = mergeGeometries(allGeoms, false);
+        const mesh = new THREE.Mesh(merged, mat);
+        mesh.castShadow = true;
+
+        const group = new THREE.Group();
+        group.add(mesh);
+        group.userData = {
+            isRing: true,
+            ringLayer: Math.floor(index / 3),
+            outerCols: p.outerCols || [],
+            shape: [[0, 0]],
+            pieceType: `Ring${Math.floor(index / 3)}`,
+            cx: 0, cy: 0,
+        };
+        return group;
+    }
+
+    const shape = getShape(p.s);
+    const { cx, cy, maxY } = computeShapeCenter(shape);
+
+    const geoms = shape.map(([x, y]) => {
+        const g = arcBlockOuterGeo.clone();
+        g.rotateY((x - cx) * COL_ANGLE_RAD);
+        g.translate(0, (y - cy) * LAYER_H, 0);
+        return g;
+    });
+    const merged = mergeGeometries(geoms, false);
+    const mesh = new THREE.Mesh(merged, mat);
+    mesh.castShadow = true;
+
+    const group = new THREE.Group();
+    group.add(mesh);
+    group.userData = { isRing: false, shape, pieceType: p.s, colorHex: p.c, cx, cy };
+    return group;
+}
+
+// 初始布局：在底座周围散开
+PIECES.forEach((cfg, i) => {
+    const obj = createPiece(cfg, i);
+    const angle = (i / PIECES.length) * Math.PI * 2 + 0.2;
+    const radius = 5.5 + (i % 3) * 0.3;
+    const baseY = obj.userData.isRing
+        ? obj.userData.ringLayer * LAYER_H + LAYER_H / 2 + 0.02
+        : LAYER_H / 2 + 0.02;
+    obj.position.set(radius * Math.cos(angle), baseY, radius * Math.sin(angle));
+    obj.rotation.y = -angle + Math.PI + (Math.random() - 0.5) * 0.3;
+    scene.add(obj);
+    obj.userData.rotOffset = 0;
+    obj.userData.placed = false;
+    draggable.push(obj);
+    originPos.push({
+        pos: obj.position.clone(),
+        rot: obj.rotation.clone()
+    });
+});
+
+// 收集所有 mesh 用于点击拾取
+const pieceMeshes = [];
+for (const piece of draggable) {
+    piece.traverse(c => { if (c.isMesh) pieceMeshes.push(c); });
+}
+
+
+// ─── 拖拽控制系统 ─────────────────────────────────────────────
+const dragControls = new DragControls(draggable, camera, renderer.domElement);
+let selectedPiece = null;
+
+function snapToPosition(obj, shape, grid, baseCol, baseLayer, rotOff) {
+    rotOff = rotOff || 0;
+    vacate(grid, obj);
+
+    const cx = obj.userData.cx || 0;
+    const cy = obj.userData.cy || 0;
+    const posY = (baseLayer + cy) * LAYER_H + LAYER_H / 2;
+
+    obj.position.set(0, posY, 0);
+    obj.rotation.set(0, 0, 0);
+    obj.rotation.y = (baseCol + cx + rotOff) * COL_ANGLE_RAD;
+
+    obj.userData.placed = true;
+    obj.userData.gridCol = baseCol;
+    obj.userData.gridLayer = baseLayer;
+
+    // 使用旋转后的形状占格
+    const rShape = shape.map(([x, y]) => [((x + rotOff) % 12 + 12) % 12, y]);
+    occupy(grid, obj, rShape, baseCol, baseLayer);
+}
+
+function snapRingToPosition(obj, layer, rotY) {
+    vacate(innerGrid, obj);
+    vacate(outerGrid, obj);
+
+    rotY = rotY || 0;
+    obj.position.set(0, layer * LAYER_H + LAYER_H / 2, 0);
+    obj.rotation.set(0, rotY, 0);
+    obj.userData.placed = true;
+    obj.userData.gridLayer = layer;
+
+    // 占用内环全部 12 格
+    for (let col = 0; col < 12; col++) {
+        innerGrid[gk(col, layer)] = obj;
+    }
+
+    // 外弧块位置（按旋转偏移）
+    const outerCols = obj.userData.outerCols;
+    const rotOff = Math.round(rotY / COL_ANGLE_RAD) || 0;
+    if (outerCols) {
+        for (const col of outerCols) {
+            outerGrid[gk((col + rotOff + 12) % 12, layer)] = obj;
+        }
+    }
+
+}
+
+dragControls.addEventListener('dragstart', (e) => {
+    controls.enabled = false;
+    controls.enableZoom = false;
+    selectedPiece = e.object;
+    const obj = e.object;
+    if (obj && obj.userData.placed) {
+        vacate(innerGrid, obj);
+        vacate(outerGrid, obj);
+        obj.userData.placed = false;
+        delete obj.userData.gridCol;
+        delete obj.userData.gridLayer;
+    }
+});
+
+dragControls.addEventListener('dragend', () => {
+    controls.enabled = true;
+    controls.enableZoom = true;
+});
+
+// ─── 旋转 / 翻转 ──────────────────────────────────────────────
+document.addEventListener('keydown', (e) => {
+    if (e.key === 'r' || e.key === 'R') {
+        if (!selectedPiece || selectedPiece.userData.placed) return;
+        if (selectedPiece.userData.isRing) return; // 环形对称，无需翻转
+
+        const ud = selectedPiece.userData;
+        ud.flipped = !ud.flipped;
+
+        const baseShape = getShape(ud.pieceType);
+        const shape = ud.flipped ? flipShape180(baseShape) : baseShape;
+        const { cx, cy } = computeShapeCenter(shape);
+        ud.shape = shape;
+        ud.cx = cx;
+        ud.cy = cy;
+
+        // 保存变换，重建后恢复（防止拖拽中重建导致位置偏移）
+        const savedPos = selectedPiece.position.clone();
+        const savedRot = selectedPiece.rotation.clone();
+        rebuildPieceMesh(selectedPiece, shape, cx, cy);
+        selectedPiece.position.copy(savedPos);
+        selectedPiece.rotation.copy(savedRot);
+    }
+});
+
+// 点击选中/取消选中积木
+const _ray = new THREE.Raycaster();
+const _ptr = new THREE.Vector2();
+document.addEventListener('pointerdown', (e) => {
+    const rect = renderer.domElement.getBoundingClientRect();
+    _ptr.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+    _ptr.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+    _ray.setFromCamera(_ptr, camera);
+    const hits = _ray.intersectObjects(pieceMeshes);
+    let picked = null;
+    if (hits.length > 0) {
+        let obj = hits[0].object;
+        while (obj.parent && !draggable.includes(obj)) obj = obj.parent;
+        if (draggable.includes(obj)) picked = obj;
+    }
+    if (picked && !picked.userData.placed) {
+        selectedPiece = picked;
+        controls.enableZoom = false;
+    } else {
+        selectedPiece = null;
+        controls.enableZoom = true;
+    }
+});
+
+// 悬停显示积木名称
+const tooltip = document.getElementById('label-tooltip');
+document.addEventListener('pointermove', (e) => {
+    const rect = renderer.domElement.getBoundingClientRect();
+    _ptr.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+    _ptr.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+    _ray.setFromCamera(_ptr, camera);
+    const hits = _ray.intersectObjects(pieceMeshes);
+    let found = null;
+    if (hits.length > 0) {
+        let obj = hits[0].object;
+        while (obj.parent && !draggable.includes(obj)) obj = obj.parent;
+        if (draggable.includes(obj)) found = obj;
+    }
+    if (found) {
+        tooltip.textContent = found.userData.pieceType || '?';
+        tooltip.style.display = 'block';
+        tooltip.style.left = e.clientX + 'px';
+        tooltip.style.top = e.clientY + 'px';
+    } else {
+        tooltip.style.display = 'none';
+    }
+});
+
+// ─── 重置 ──────────────────────────────────────────────────────
+function resetGame() {
+    for (const key in innerGrid) delete innerGrid[key];
+    for (const key in outerGrid) delete outerGrid[key];
+
+    draggable.forEach((o, i) => {
+        o.position.copy(originPos[i].pos);
+        o.rotation.copy(originPos[i].rot);
+        o.userData.placed = false;
+        o.userData.rotOffset = 0;
+        if (!o.userData.isRing && o.userData.flipped) {
+            o.userData.flipped = false;
+            const baseShape = getShape(o.userData.pieceType);
+            const { cx, cy } = computeShapeCenter(baseShape);
+            o.userData.shape = baseShape;
+            o.userData.cx = cx;
+            o.userData.cy = cy;
+            rebuildPieceMesh(o, baseShape, cx, cy);
+        }
+        delete o.userData.flipped;
+        delete o.userData.gridCol;
+        delete o.userData.gridLayer;
+    });
+
+    selectedPiece = null;
+    controls.enableZoom = true;
+}
+
+// ─── 自动求解 ──────────────────────────────────────────────────
+// 预计算所有 pentomino 放置
+const _solvePentItems = [
+    { idx: 1, name: 'I' }, { idx: 2, name: 'L' }, { idx: 4, name: 'S' }, { idx: 5, name: 'T' },
+    { idx: 7, name: 'F' }, { idx: 8, name: 'W' }, { idx: 10, name: 'Q' }, { idx: 11, name: 'U' },
+    { idx: 13, name: 'N' }, { idx: 14, name: 'Y' },
+];
+const _solveAllPlacements = _solvePentItems.map((item, pi) => {
+    const baseShape = getShape(item.name);
+    const list = [];
+    for (let f = 0; f < 2; f++) {
+        const shape = f ? flipShape180(baseShape) : baseShape;
+        const ys = shape.map(c => c[1]), minY = Math.min(...ys), maxY = Math.max(...ys);
+        for (let bc = 0; bc < 12; bc++) {
+            for (let bl = -minY; bl < LAYERS - maxY; bl++) {
+                const cells = shape.map(([x, y]) => [((bc + x) % 12 + 12) % 12, bl + y]);
+                list.push({ pi, idx: item.idx, shape, flipped: !!f, bc, bl, cells });
+            }
+        }
+    }
+    return list;
+});
+
+function _solveTryPlace(used, grid, placed, result, order) {
+    if (placed === _solvePentItems.length) return true;
+
+    let bestCount = Infinity, bestOptions = null;
+    const total = LAYERS * COLS;
+    for (let i = 0; i < total; i++) {
+        if (grid[i] !== -1) continue;
+        const cl = Math.floor(i / COLS), cc = i % COLS;
+        let count = 0, opts = [];
+        for (let oi = 0; oi < _solvePentItems.length; oi++) {
+            const pi = order[oi];
+            if (used[pi]) continue;
+            for (const p of _solveAllPlacements[pi]) {
+                if (!p.cells.some(([pc, pl]) => pc === cc && pl === cl)) continue;
+                let valid = true;
+                for (const [pc, pl] of p.cells) { if (grid[pl * COLS + pc] !== -1) { valid = false; break; } }
+                if (!valid) continue;
+                count++;
+                opts.push(p);
+            }
+        }
+        if (count === 0) return false;
+        if (count < bestCount || (count === bestCount && Math.random() < 0.3)) {
+            bestCount = count; bestOptions = opts;
+            if (bestCount === 1) break;
+        }
+    }
+    if (!bestOptions) return false;
+
+    for (const p of bestOptions) {
+        for (const [pc, pl] of p.cells) grid[pl * COLS + pc] = p.pi;
+        used[p.pi] = true; result.push(p);
+        if (_solveTryPlace(used, grid, placed + 1, result, order)) return true;
+        result.pop(); used[p.pi] = false;
+        for (const [pc, pl] of p.cells) grid[pl * COLS + pc] = -1;
+    }
+    return false;
+}
+
+function _solveRingLayers(order, ringBlocked) {
+    const grid = new Int8Array(LAYERS * COLS);
+    grid.fill(-1);
+    if (ringBlocked) {
+        for (let l = 0; l < LAYERS; l++) {
+            for (const c of ringBlocked[l]) {
+                grid[l * COLS + ((c % 12) + 12) % 12] = -2;
+            }
+        }
+    }
+    const result = [];
+    if (_solveTryPlace(new Array(_solvePentItems.length).fill(false), grid, 0, result, order)) return result;
+    return null;
+}
+
+async function autoSolve() {
+    const btn = document.getElementById('auto-solve');
+    const resetBtn = document.getElementById('reset');
+    btn.disabled = true;
+    resetBtn.disabled = true;
+    btn.textContent = '求解中...';
+    await new Promise(r => setTimeout(r, 0));
+
+    const ringIndices = [0, 3, 6, 9, 12];
+    const ringLocalCols = [[0,1], [1,3], [2,5], [3,7], [4,9]];
+    const totalAttempts = 2000;
+
+    for (let attempt = 0; attempt < totalAttempts; attempt++) {
+
+        const layers = [0, 1, 2, 3, 4];
+        for (let i = layers.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [layers[i], layers[j]] = [layers[j], layers[i]];
+        }
+
+        const rotations = ringLocalCols.map(() => Math.floor(Math.random() * 12));
+
+        const ringBlocked = [];
+        for (let l = 0; l < 5; l++) {
+            const ri = layers[l];
+            const localCols = ringLocalCols[ri];
+            const rot = rotations[ri];
+            ringBlocked[l] = localCols.map(c => ((c + rot) % 12 + 12) % 12);
+        }
+
+        const order = [...Array(_solvePentItems.length).keys()];
+        for (let i = order.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [order[i], order[j]] = [order[j], order[i]];
+        }
+        const pentResult = _solveRingLayers(order, ringBlocked);
+
+        if (pentResult) {
+            for (let l = 0; l < 5; l++) {
+                const ri = layers[l];
+                const obj = draggable[ringIndices[ri]];
+                snapRingToPosition(obj, l, rotations[ri] * COL_ANGLE_RAD);
+            }
+
+            for (const p of pentResult) {
+                const obj = draggable[p.idx];
+                vacate(outerGrid, obj);
+                const baseShape = getShape(_solvePentItems[p.pi].name);
+                if (p.flipped) {
+                    const shape = flipShape180(baseShape);
+                    const { cx, cy } = computeShapeCenter(shape);
+                    obj.userData.flipped = true; obj.userData.shape = shape; obj.userData.cx = cx; obj.userData.cy = cy;
+                    rebuildPieceMesh(obj, shape, cx, cy);
+                } else if (obj.userData.flipped) {
+                    obj.userData.flipped = false;
+                    const { cx, cy } = computeShapeCenter(baseShape);
+                    obj.userData.shape = baseShape; obj.userData.cx = cx; obj.userData.cy = cy;
+                    rebuildPieceMesh(obj, baseShape, cx, cy);
+                }
+                obj.userData.rotOffset = 0;
+                snapToPosition(obj, obj.userData.shape, outerGrid, p.bc, p.bl, 0);
+            }
+            btn.disabled = false;
+            resetBtn.disabled = false;
+            btn.textContent = '🎉 求解成功';
+            selectedPiece = null;
+            controls.enableZoom = true;
+            return true;
+        }
+    }
+
+    btn.disabled = false;
+    resetBtn.disabled = false;
+    btn.textContent = '❌ 求解失败';
+    return false;
+}
+
+document.getElementById('auto-solve').onclick = () => { autoSolve(); };
+document.getElementById('reset').onclick = resetGame;
+
+// ─── 窗口 ──────────────────────────────────────────────────────
+window.addEventListener('resize', () => {
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+});
+
+// ─── 渲染循环 ──────────────────────────────────────────────────
+function render() {
+    requestAnimationFrame(render);
+    controls.update();
+    renderer.render(scene, camera);
+}
+render();
+
+// Dev debug helper
+window.__debug = { THREE, draggable, originPos, renderer, camera, scene,
+  innerGrid, outerGrid, snapToPosition, snapRingToPosition, gk,
+  PIECES, getShape, computeShapeCenter, flipShape180, rebuildPieceMesh,
+  COLS, LAYERS, COL_ANGLE, INNER_R, OUTER_R, LAYER_H };</script>
+</body>
+</html>
