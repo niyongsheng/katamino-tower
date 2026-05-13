@@ -8,8 +8,10 @@
         * { margin: 0; padding: 0; }
         body { overflow: hidden; background: #f0ebe3; font-family: system-ui, sans-serif; }
         #ui { position: absolute; top: 10px; left: 10px; z-index: 999; display: flex; gap: 8px; align-items: center; }
-        #ui button { padding: 8px 16px; background: #4285F4; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 14px; }
+        #ui button { padding: 8px 16px; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 14px; }
         #ui button:disabled { background: #999; cursor: default; }
+        #auto-solve { background: #3498db; }
+        #reset { background: #2ecc71; }
         #hint { position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%); z-index: 999;
                  background: rgba(0,0,0,0.6); color: #fff; padding: 8px 18px; border-radius: 20px; font-size: 13px; pointer-events: none; }
         #label-tooltip { position: absolute; display: none; background: rgba(0,0,0,0.85); color: #fff;
@@ -26,7 +28,7 @@
 </head>
 <body>
 <div id="ui">
-    <button id="auto-solve">算法求解</button>
+    <button id="auto-solve">开始求解</button>
     <button id="reset">重置</button>
 </div>
 <div id="hint">🖱 拖拽积木 · R 翻转</div>
@@ -127,6 +129,58 @@ const pillarMat = new THREE.MeshLambertMaterial({ color: 0xf5deb3 });
 const pillar = new THREE.Mesh(new THREE.CylinderGeometry(0.4, 0.4, LAYERS * LAYER_H, 16), pillarMat);
 pillar.position.y = LAYERS * LAYER_H / 2;
 scene.add(pillar);
+
+// ─── 分割线：12条30°径向 + 5圈横向 ────────────────────────────
+function createDivisionLines() {
+    const lineMat = new THREE.LineBasicMaterial({
+        color: 0x8b7355,
+        linewidth: 1
+    });
+
+    const totalHeight = LAYERS * LAYER_H;
+    // 12条径向分割线
+    for (let i = 0; i < COLS; i++) {
+        const angle = i * COL_ANGLE_RAD;
+        const x1 = OUTER_R * Math.cos(angle);
+        const z1 = OUTER_R * Math.sin(angle);
+        const x2 = 0.4 * Math.cos(angle);
+        const z2 = 0.4 * Math.sin(angle);
+
+        const points = [];
+        points.push(new THREE.Vector3(x1, 0, z1));
+        points.push(new THREE.Vector3(x1, totalHeight, z1));
+        points.push(new THREE.Vector3(x2, totalHeight, z2));
+        points.push(new THREE.Vector3(x2, 0, z2));
+
+        const geometry1 = new THREE.BufferGeometry().setFromPoints([points[0], points[1]]);
+        const geometry2 = new THREE.BufferGeometry().setFromPoints([points[1], points[2]]);
+        const geometry3 = new THREE.BufferGeometry().setFromPoints([points[2], points[3]]);
+
+        const line1 = new THREE.Line(geometry1, lineMat);
+        const line2 = new THREE.Line(geometry2, lineMat);
+        const line3 = new THREE.Line(geometry3, lineMat);
+        scene.add(line1);
+        scene.add(line2);
+        scene.add(line3);
+    }
+
+    // 5圈横向分割线（每层顶部）
+    const ringSeg = 48;
+    for (let layer = 1; layer <= LAYERS; layer++) {
+        const y = layer * LAYER_H;
+        const innerPts = [], outerPts = [];
+        for (let j = 0; j <= ringSeg; j++) {
+            const a = (j / ringSeg) * Math.PI * 2;
+            innerPts.push(new THREE.Vector3(0.4 * Math.cos(a), y, 0.4 * Math.sin(a)));
+            outerPts.push(new THREE.Vector3(OUTER_R * Math.cos(a), y, OUTER_R * Math.sin(a)));
+        }
+        const innerGeo = new THREE.BufferGeometry().setFromPoints(innerPts);
+        const outerGeo = new THREE.BufferGeometry().setFromPoints(outerPts);
+        scene.add(new THREE.Line(innerGeo, lineMat));
+        scene.add(new THREE.Line(outerGeo, lineMat));
+    }
+}
+createDivisionLines();
 
 // ─── 弧形块几何体 ──────────────────────────────────────────────
 function createArcBlock(innerR, outerR, height, seg) {
@@ -637,7 +691,7 @@ async function autoSolve() {
 }
 
 document.getElementById('auto-solve').onclick = () => { autoSolve(); };
-document.getElementById('reset').onclick = resetGame;
+document.getElementById('reset').onclick = () => location.reload();
 
 // ─── 窗口 ──────────────────────────────────────────────────────
 window.addEventListener('resize', () => {
