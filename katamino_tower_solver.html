@@ -3,7 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Katamino Tower 3D</title>
+    <title>Katamino Tower Solver</title>
+    <link rel="alternate" href="README.md" hreflang="en">
     <style>
         * { margin: 0; padding: 0; }
         body { overflow: hidden; background: #f0ebe3; font-family: system-ui, sans-serif; }
@@ -12,12 +13,23 @@
         #ui button:disabled { background: #999; cursor: default; }
         #auto-solve { background: #3498db; }
         #reset { background: #2ecc71; }
+        #explode { background: #e74c3c; display: none; }
         #hint { position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%); z-index: 999;
                  background: rgba(0,0,0,0.6); color: #fff; padding: 8px 18px; border-radius: 20px; font-size: 13px; pointer-events: none; }
         #label-tooltip { position: absolute; display: none; background: rgba(0,0,0,0.85); color: #fff;
                  padding: 4px 12px; border-radius: 4px; font: bold 14px system-ui, sans-serif;
                  pointer-events: none; user-select: none; z-index: 100;
                  transform: translate(-50%, -100%); margin-top: -10px; }
+
+        .lang-switch { position: relative; display: inline-block; width: 48px; height: 26px; flex-shrink: 0; }
+        .lang-switch input { opacity: 0; width: 0; height: 0; }
+        .lang-switch .slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0;
+            background: #e84393; border-radius: 26px; transition: .3s; }
+        .lang-switch .slider::before { position: absolute; content: '中'; height: 20px; width: 20px;
+            left: 3px; bottom: 3px; background: #fff; border-radius: 50%; transition: .3s;
+            display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: bold; color: #e84393; }
+        .lang-switch input:checked + .slider { background: #e84393; }
+        .lang-switch input:checked + .slider::before { transform: translateX(22px); content: 'EN'; }
 
         .github-corner { position: fixed; top: 0; right: 0; z-index: 1000; }
         .github-corner svg { color: #fff; fill: #c4a882; width: 80px; height: 80px; }
@@ -30,6 +42,9 @@
 <div id="ui">
     <button id="auto-solve">开始求解</button>
     <button id="reset">重置</button>
+    <button id="explode">爆炸图</button>
+    <label style="color:#555;font-size:13px;display:none" id="distLabel">间距 <input type="range" id="distSlider" min="0" max="6" step="0.1" value="3" style="vertical-align:middle"></label>
+    <label class="lang-switch"><input type="checkbox" id="langToggle"><span class="slider"></span></label>
 </div>
 <div id="hint">🖱 拖拽积木 · R 翻转</div>
 <div id="label-tooltip"></div>
@@ -56,6 +71,58 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { DragControls } from 'three/addons/controls/DragControls.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+
+// ─── 国际化 ──────────────────────────────────────────────────────
+let _lang = 'zh-CN';
+const _langBtn = document.getElementById('langToggle');
+const i18n = {
+    'zh-CN': {
+        solving: '求解中...',
+        stopping: '正在停止...',
+        cancelled: '❌ 已取消',
+        success: '🎉 求解成功',
+        failed: '❌ 求解失败',
+        progress: (n, s) => `求解中 ${n}n (${s}s)`,
+        hint: '🖱 拖拽积木 · R 翻转',
+        distLabel: '间距',
+        explodeBtn: '爆炸图',
+        resetBtn: '复原图',
+        autoSolve: '开始求解',
+        reset: '重置',
+    },
+    en: {
+        solving: 'Solving...',
+        stopping: 'Stopping...',
+        cancelled: '❌ Cancelled',
+        success: '🎉 Solved!',
+        failed: '❌ No solution',
+        progress: (n, s) => `Solving ${n}n (${s}s)`,
+        hint: '🖱 Drag pieces · R to flip',
+        distLabel: 'Gap',
+        explodeBtn: 'Explode',
+        resetBtn: 'Restore',
+        autoSolve: 'Solve',
+        reset: 'Reset',
+    },
+};
+function setLanguage(lang) {
+    _lang = lang;
+    document.documentElement.lang = lang;
+    const t = i18n[lang];
+    const btn = document.getElementById('auto-solve');
+    if (!window._solving) btn.textContent = t.autoSolve;
+    document.getElementById('reset').textContent = t.reset;
+    document.getElementById('hint').textContent = t.hint;
+    const distLabel = document.getElementById('distLabel');
+    distLabel.childNodes[0].textContent = t.distLabel + ' ';
+    const eb = document.getElementById('explode');
+    if (_exploded) eb.textContent = t.resetBtn; else eb.textContent = t.explodeBtn;
+    _langBtn.checked = lang === 'en';
+    window._i18n = t;
+}
+_langBtn.addEventListener('change', () => {
+    setLanguage(_langBtn.checked ? 'en' : 'zh-CN');
+});
 
 // ─── 参数 ──────────────────────────────────────────────────────
 const COLS = 12;           // 每层列数（每列 30°）
@@ -523,10 +590,16 @@ function resetGame() {
     for (const key in outerGrid) delete outerGrid[key];
 
     draggable.forEach((o, i) => {
-        o.position.copy(originPos[i].pos);
-        o.rotation.copy(originPos[i].rot);
+        const angle = Math.random() * Math.PI * 2;
+        const radius = 4 + Math.random() * 4;
+        const baseY = o.userData.isRing
+            ? (o.userData.ringLayer || 0) * LAYER_H + LAYER_H / 2 + 0.02
+            : LAYER_H / 2 + 0.02;
+        o.position.set(radius * Math.cos(angle), baseY, radius * Math.sin(angle));
+        o.rotation.set(0, Math.random() * Math.PI * 2, 0);
         o.userData.placed = false;
         o.userData.rotOffset = 0;
+        resetChildMeshTransform(o);
         if (!o.userData.isRing && o.userData.flipped) {
             o.userData.flipped = false;
             const baseShape = getShape(o.userData.pieceType);
@@ -543,7 +616,86 @@ function resetGame() {
 
     selectedPiece = null;
     controls.enableZoom = true;
+    document.getElementById('explode').style.display = 'none';
+    document.getElementById('distLabel').style.display = 'none';
+    _exploded = false;
+    _solvedPositions = null;
 }
+
+// ─── 爆炸图 ─────────────────────────────────────────────────────
+let _exploded = false;
+let _solvedPositions = null;
+let _animFrame = null;
+
+function toggleExplode() {
+    const EXPLODE_DIST = parseFloat(document.getElementById('distSlider').value);
+    const RING_GAP = 1.1 + EXPLODE_DIST * 0.2;
+    const DURATION = 400;
+    if (_animFrame) { cancelAnimationFrame(_animFrame); _animFrame = null; }
+    _exploded = !_exploded;
+
+    const toStates = [];
+    if (_exploded) {
+        const rings = draggable.map((o,i)=>({o,i})).filter(({o})=>o.userData.isRing)
+            .sort((a,b)=>_solvedPositions[a.i].pos.y-_solvedPositions[b.i].pos.y);
+        const baseY = _solvedPositions[rings[0].i].pos.y;
+        draggable.forEach((o, i) => {
+            const sp = _solvedPositions[i];
+            if (o.userData.isRing) {
+                const idx = rings.findIndex(r=>r.o===o);
+                toStates.push({pos:new THREE.Vector3(sp.pos.x,baseY+idx*RING_GAP,sp.pos.z), rot:sp.rot.clone()});
+            } else {
+                const dir = new THREE.Vector3(Math.cos(sp.rot.y), 0, -Math.sin(sp.rot.y));
+                toStates.push({pos:new THREE.Vector3(sp.pos.x+dir.x*EXPLODE_DIST,sp.pos.y,sp.pos.z+dir.z*EXPLODE_DIST), rot:sp.rot.clone()});
+            }
+        });
+    } else {
+        draggable.forEach((o, i) => {
+            toStates.push({pos:_solvedPositions[i].pos.clone(), rot:_solvedPositions[i].rot.clone()});
+        });
+    }
+
+    const fromStates = draggable.map(o => ({pos:o.position.clone(), rot:o.rotation.clone()}));
+    const start = performance.now();
+    (function frame() {
+        const t = Math.min((performance.now()-start)/DURATION,1);
+        const ease = t<0.5 ? 4*t*t*t : 1-Math.pow(-2*t+2,3)/2;
+        draggable.forEach((o, i) => {
+            o.position.lerpVectors(fromStates[i].pos, toStates[i].pos, ease);
+            o.rotation.x = fromStates[i].rot.x + (toStates[i].rot.x-fromStates[i].rot.x)*ease;
+            o.rotation.y = fromStates[i].rot.y + (toStates[i].rot.y-fromStates[i].rot.y)*ease;
+            o.rotation.z = fromStates[i].rot.z + (toStates[i].rot.z-fromStates[i].rot.z)*ease;
+        });
+        if (t<1) _animFrame = requestAnimationFrame(frame);
+        else _animFrame = null;
+    })();
+
+    document.getElementById('explode').textContent = _exploded ? i18n[_lang].resetBtn : i18n[_lang].explodeBtn;
+}
+
+document.getElementById('explode').onclick = toggleExplode;
+
+document.getElementById('distSlider').addEventListener('input', () => {
+    if (_exploded && _solvedPositions) {
+        if (_animFrame) { cancelAnimationFrame(_animFrame); _animFrame = null; }
+        const d = parseFloat(document.getElementById('distSlider').value);
+        const rings = draggable.map((o,i)=>({o,i})).filter(({o})=>o.userData.isRing)
+            .sort((a,b)=>_solvedPositions[a.i].pos.y-_solvedPositions[b.i].pos.y);
+        const baseY = _solvedPositions[rings[0].i].pos.y;
+        draggable.forEach((o, i) => {
+            const sp = _solvedPositions[i];
+            if (o.userData.isRing) {
+                const idx = rings.findIndex(r=>r.o===o);
+                o.position.set(sp.pos.x, baseY + idx * (1.1 + d * 0.2), sp.pos.z);
+                o.rotation.copy(sp.rot);
+            } else {
+                const dir = new THREE.Vector3(Math.cos(sp.rot.y), 0, -Math.sin(sp.rot.y));
+                o.position.set(sp.pos.x + dir.x * d, sp.pos.y, sp.pos.z + dir.z * d);
+                o.rotation.copy(sp.rot);
+            }
+        });
+    }
+});
 
 // ─── 自动求解 ──────────────────────────────────────────────────
 // 预计算所有 pentomino 放置
@@ -633,14 +785,14 @@ async function autoSolve() {
     // 中止正在进行的求解
     if (window._solving) {
         window._abortSolver = true;
-        btn.textContent = '正在停止...';
+        btn.textContent = i18n[_lang].stopping;
         btn.disabled = true;
         return;
     }
 
     btn.disabled = true;
     resetBtn.disabled = true;
-    btn.textContent = '求解中...';
+    btn.textContent = i18n[_lang].solving;
     // 等待渲染完成后再开始，确保手机能看到按钮文字变化
     await new Promise(r => requestAnimationFrame(r));
     await new Promise(r => setTimeout(r, 10));
@@ -659,7 +811,7 @@ async function autoSolve() {
 
         // 检查是否被中止
         if (window._abortSolver) {
-            btn.textContent = '❌ 已取消';
+            btn.textContent = i18n[_lang].cancelled;
             btn.disabled = false;
             resetBtn.disabled = false;
             window._solving = false;
@@ -670,7 +822,7 @@ async function autoSolve() {
         // 定期让出主线程 + 更新进度
         if (attempt % yieldInterval === 0) {
             const elapsed = ((Date.now() - solveStartTime) / 1000).toFixed(1);
-            btn.textContent = `求解中 ${_solveBtCount}n (${elapsed}s)`;
+            btn.textContent = i18n[_lang].progress(_solveBtCount, elapsed);
             await new Promise(r => setTimeout(r, 0));
         }
 
@@ -724,7 +876,11 @@ async function autoSolve() {
             }
             btn.disabled = false;
             resetBtn.disabled = false;
-            btn.textContent = '🎉 求解成功';
+            btn.textContent = i18n[_lang].success;
+            _exploded = false;
+            _solvedPositions = draggable.map(o => ({ pos: o.position.clone(), rot: o.rotation.clone() }));
+            document.getElementById('explode').style.display = 'inline-block';
+            document.getElementById('distLabel').style.display = 'inline';
             selectedPiece = null;
             controls.enableZoom = true;
             window._solving = false;
@@ -734,13 +890,13 @@ async function autoSolve() {
 
     btn.disabled = false;
     resetBtn.disabled = false;
-    btn.textContent = '❌ 求解失败';
+    btn.textContent = i18n[_lang].failed;
     window._solving = false;
     return false;
 }
 
 document.getElementById('auto-solve').onclick = () => { autoSolve(); };
-document.getElementById('reset').onclick = () => location.reload();
+document.getElementById('reset').onclick = () => { resetGame(); };
 
 // ─── 窗口 ──────────────────────────────────────────────────────
 window.addEventListener('resize', () => {
@@ -756,6 +912,8 @@ function render() {
     renderer.render(scene, camera);
 }
 render();
+
+setLanguage('zh-CN');
 
 // Dev debug helper
 window.__debug = { THREE, draggable, originPos, renderer, camera, scene,
