@@ -2,8 +2,7 @@
 
 <img src="./logo.png" width="300">
 
-> 3D Puzzle Solver<br>
-> [Katamino Tower](https://en.gigamic.com/family-games/1109-katamino-tower.html)
+> [Katamino Tower](https://en.gigamic.com/family-games/1109-katamino-tower.html) 3D Puzzle Solver
 
 English | [简体中文](./README.zh-CN.md)
 

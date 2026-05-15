@@ -110,7 +110,7 @@ function setLanguage(lang) {
     document.documentElement.lang = lang;
     const t = i18n[lang];
     const btn = document.getElementById('auto-solve');
-    if (!window._solving) btn.textContent = t.autoSolve;
+    if (!_solving) btn.textContent = t.autoSolve;
     document.getElementById('reset').textContent = t.reset;
     document.getElementById('hint').textContent = t.hint;
     const distLabel = document.getElementById('distLabel');
@@ -118,7 +118,6 @@ function setLanguage(lang) {
     const eb = document.getElementById('explode');
     if (_exploded) eb.textContent = t.resetBtn; else eb.textContent = t.explodeBtn;
     _langBtn.checked = lang === 'en';
-    window._i18n = t;
 }
 _langBtn.addEventListener('change', () => {
     setLanguage(_langBtn.checked ? 'en' : 'zh-CN');
@@ -335,7 +334,6 @@ function rebuildPieceMesh(group, shape, cx, cy) {
 
 // ─── 创建积木 ─────────────────────────────────────────────────
 const draggable = [];
-const originPos = [];
 
 function flipShape180(shape) {
     const xs = shape.map(v => v[0]), ys = shape.map(v => v[1]);
@@ -421,10 +419,6 @@ PIECES.forEach((cfg, i) => {
     obj.userData.rotOffset = 0;
     obj.userData.placed = false;
     draggable.push(obj);
-    originPos.push({
-        pos: obj.position.clone(),
-        rot: obj.rotation.clone()
-    });
 });
 
 // 收集所有 mesh 用于点击拾取
@@ -586,6 +580,7 @@ document.addEventListener('pointermove', (e) => {
 
 // ─── 重置 ──────────────────────────────────────────────────────
 function resetGame() {
+    if (_solving) { _abortSolver = true; }
     for (const key in innerGrid) delete innerGrid[key];
     for (const key in outerGrid) delete outerGrid[key];
 
@@ -622,43 +617,45 @@ function resetGame() {
     _solvedPositions = null;
 }
 
+// ─── 求解状态 ───────────────────────────────────────────────────
+let _solving = false;
+let _abortSolver = false;
+
 // ─── 爆炸图 ─────────────────────────────────────────────────────
 let _exploded = false;
 let _solvedPositions = null;
 let _animFrame = null;
+const _distSlider = document.getElementById('distSlider');
+
+function computeExplodePositions(dist) {
+    const ringGap = LAYER_H + dist * 0.2;
+    const rings = draggable.map((o,i)=>({o,i})).filter(({o})=>o.userData.isRing)
+        .sort((a,b)=>_solvedPositions[a.i].pos.y-_solvedPositions[b.i].pos.y);
+    const baseY = _solvedPositions[rings[0].i].pos.y;
+    const ringIdx = new Map(rings.map((r, idx) => [r.o, idx]));
+    return draggable.map((o, i) => {
+        const sp = _solvedPositions[i];
+        if (o.userData.isRing) {
+            return { pos: new THREE.Vector3(sp.pos.x, baseY + ringIdx.get(o) * ringGap, sp.pos.z), rot: sp.rot.clone() };
+        } else {
+            const dir = new THREE.Vector3(Math.cos(sp.rot.y), 0, -Math.sin(sp.rot.y));
+            return { pos: new THREE.Vector3(sp.pos.x + dir.x * dist, sp.pos.y, sp.pos.z + dir.z * dist), rot: sp.rot.clone() };
+        }
+    });
+}
 
 function toggleExplode() {
-    const EXPLODE_DIST = parseFloat(document.getElementById('distSlider').value);
-    const RING_GAP = 1.1 + EXPLODE_DIST * 0.2;
-    const DURATION = 400;
+    const dist = _distSlider.valueAsNumber;
+    if (!_solvedPositions) return;
     if (_animFrame) { cancelAnimationFrame(_animFrame); _animFrame = null; }
     _exploded = !_exploded;
 
-    const toStates = [];
-    if (_exploded) {
-        const rings = draggable.map((o,i)=>({o,i})).filter(({o})=>o.userData.isRing)
-            .sort((a,b)=>_solvedPositions[a.i].pos.y-_solvedPositions[b.i].pos.y);
-        const baseY = _solvedPositions[rings[0].i].pos.y;
-        draggable.forEach((o, i) => {
-            const sp = _solvedPositions[i];
-            if (o.userData.isRing) {
-                const idx = rings.findIndex(r=>r.o===o);
-                toStates.push({pos:new THREE.Vector3(sp.pos.x,baseY+idx*RING_GAP,sp.pos.z), rot:sp.rot.clone()});
-            } else {
-                const dir = new THREE.Vector3(Math.cos(sp.rot.y), 0, -Math.sin(sp.rot.y));
-                toStates.push({pos:new THREE.Vector3(sp.pos.x+dir.x*EXPLODE_DIST,sp.pos.y,sp.pos.z+dir.z*EXPLODE_DIST), rot:sp.rot.clone()});
-            }
-        });
-    } else {
-        draggable.forEach((o, i) => {
-            toStates.push({pos:_solvedPositions[i].pos.clone(), rot:_solvedPositions[i].rot.clone()});
-        });
-    }
+    const toStates = _exploded ? computeExplodePositions(dist) : _solvedPositions.map(sp => ({pos:sp.pos.clone(), rot:sp.rot.clone()}))
 
     const fromStates = draggable.map(o => ({pos:o.position.clone(), rot:o.rotation.clone()}));
     const start = performance.now();
     (function frame() {
-        const t = Math.min((performance.now()-start)/DURATION,1);
+        const t = Math.min((performance.now()-start)/400,1);
         const ease = t<0.5 ? 4*t*t*t : 1-Math.pow(-2*t+2,3)/2;
         draggable.forEach((o, i) => {
             o.position.lerpVectors(fromStates[i].pos, toStates[i].pos, ease);
@@ -675,25 +672,11 @@ function toggleExplode() {
 
 document.getElementById('explode').onclick = toggleExplode;
 
-document.getElementById('distSlider').addEventListener('input', () => {
+_distSlider.addEventListener('input', () => {
     if (_exploded && _solvedPositions) {
         if (_animFrame) { cancelAnimationFrame(_animFrame); _animFrame = null; }
-        const d = parseFloat(document.getElementById('distSlider').value);
-        const rings = draggable.map((o,i)=>({o,i})).filter(({o})=>o.userData.isRing)
-            .sort((a,b)=>_solvedPositions[a.i].pos.y-_solvedPositions[b.i].pos.y);
-        const baseY = _solvedPositions[rings[0].i].pos.y;
-        draggable.forEach((o, i) => {
-            const sp = _solvedPositions[i];
-            if (o.userData.isRing) {
-                const idx = rings.findIndex(r=>r.o===o);
-                o.position.set(sp.pos.x, baseY + idx * (1.1 + d * 0.2), sp.pos.z);
-                o.rotation.copy(sp.rot);
-            } else {
-                const dir = new THREE.Vector3(Math.cos(sp.rot.y), 0, -Math.sin(sp.rot.y));
-                o.position.set(sp.pos.x + dir.x * d, sp.pos.y, sp.pos.z + dir.z * d);
-                o.rotation.copy(sp.rot);
-            }
-        });
+        const targets = computeExplodePositions(_distSlider.valueAsNumber);
+        draggable.forEach((o, i) => { o.position.copy(targets[i].pos); o.rotation.copy(targets[i].rot); });
     }
 });
 
@@ -783,8 +766,8 @@ async function autoSolve() {
     const resetBtn = document.getElementById('reset');
 
     // 中止正在进行的求解
-    if (window._solving) {
-        window._abortSolver = true;
+    if (_solving) {
+        _abortSolver = true;
         btn.textContent = i18n[_lang].stopping;
         btn.disabled = true;
         return;
@@ -797,8 +780,8 @@ async function autoSolve() {
     await new Promise(r => requestAnimationFrame(r));
     await new Promise(r => setTimeout(r, 10));
 
-    window._solving = true;
-    window._abortSolver = false;
+    _solving = true;
+    _abortSolver = false;
     _solveBtCount = 0;
 
     const ringIndices = [0, 3, 6, 9, 12];
@@ -810,12 +793,12 @@ async function autoSolve() {
     for (let attempt = 0; attempt < totalAttempts; attempt++) {
 
         // 检查是否被中止
-        if (window._abortSolver) {
+        if (_abortSolver) {
             btn.textContent = i18n[_lang].cancelled;
             btn.disabled = false;
             resetBtn.disabled = false;
-            window._solving = false;
-            window._abortSolver = false;
+            _solving = false;
+            _abortSolver = false;
             return false;
         }
 
@@ -883,7 +866,7 @@ async function autoSolve() {
             document.getElementById('distLabel').style.display = 'inline';
             selectedPiece = null;
             controls.enableZoom = true;
-            window._solving = false;
+            _solving = false;
             return true;
         }
     }
@@ -891,7 +874,7 @@ async function autoSolve() {
     btn.disabled = false;
     resetBtn.disabled = false;
     btn.textContent = i18n[_lang].failed;
-    window._solving = false;
+    _solving = false;
     return false;
 }
 
@@ -916,7 +899,7 @@ render();
 setLanguage('zh-CN');
 
 // Dev debug helper
-window.__debug = { THREE, draggable, originPos, renderer, camera, scene,
+window.__debug = { THREE, draggable, renderer, camera, scene,
   innerGrid, outerGrid, snapToPosition, snapRingToPosition, gk,
   PIECES, getShape, computeShapeCenter, flipShape180, rebuildPieceMesh,
   COLS, LAYERS, COL_ANGLE, INNER_R, OUTER_R, LAYER_H };</script>

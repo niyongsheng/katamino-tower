@@ -4,8 +4,7 @@
 
 <img src="./logo.png" width="300">
 
-> 百变方块立体塔求解器<br>
-> [Katamino Tower](https://en.gigamic.com/family-games/1109-katamino-tower.html) 3D Puzzle Solver
+> [百变方块立体塔](https://en.gigamic.com/family-games/1109-katamino-tower.html)求解器
 
 简体中文 | [English](./README.md)
 
