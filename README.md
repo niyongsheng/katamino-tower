@@ -1,6 +1,6 @@
 # Katamino Tower
 
-<img src="./katamino-tower.png" width="300">
+<img src="./logo.png" width="300">
 
 > 百变方块立体塔求解器<br>
 > [Katamino Tower](https://en.gigamic.com/family-games/1109-katamino-tower.html) 3D Puzzle Solver
@@ -13,6 +13,8 @@
 open katamino_tower_solver.html
 ```
 - **拖拽**移动积木，**R** 翻转五联骨牌，**算法求解**3D可视化
+
+- https://niyongsheng.github.io/katamino-tower/katamino_tower_solver.html
 
 ### C 命令行版
 

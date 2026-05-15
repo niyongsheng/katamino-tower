@@ -253,6 +253,8 @@ function vacate(grid, piece) {
 
 function rebuildPieceMesh(group, shape, cx, cy) {
     const mesh = group.children.find(c => c.isMesh);
+    mesh.position.set(0, 0, 0);
+    mesh.quaternion.identity();
     const geoms = shape.map(([x, y]) => {
         const g = arcBlockOuterGeo.clone();
         g.rotateY((x - cx) * COL_ANGLE_RAD);
@@ -369,9 +371,15 @@ for (const piece of draggable) {
 const dragControls = new DragControls(draggable, camera, renderer.domElement);
 let selectedPiece = null;
 
+function resetChildMeshTransform(obj) {
+    const mesh = obj.children.find(c => c.isMesh);
+    if (mesh) { mesh.position.set(0, 0, 0); mesh.quaternion.identity(); }
+}
+
 function snapToPosition(obj, shape, grid, baseCol, baseLayer, rotOff) {
     rotOff = rotOff || 0;
     vacate(grid, obj);
+    resetChildMeshTransform(obj);
 
     const cx = obj.userData.cx || 0;
     const cy = obj.userData.cy || 0;
@@ -393,6 +401,7 @@ function snapToPosition(obj, shape, grid, baseCol, baseLayer, rotOff) {
 function snapRingToPosition(obj, layer, rotY) {
     vacate(innerGrid, obj);
     vacate(outerGrid, obj);
+    resetChildMeshTransform(obj);
 
     rotY = rotY || 0;
     obj.position.set(0, layer * LAYER_H + LAYER_H / 2, 0);
@@ -634,7 +643,7 @@ async function autoSolve() {
     btn.textContent = '求解中...';
     // 等待渲染完成后再开始，确保手机能看到按钮文字变化
     await new Promise(r => requestAnimationFrame(r));
-    await new Promise(r => setTimeout(r, 50));
+    await new Promise(r => setTimeout(r, 10));
 
     window._solving = true;
     window._abortSolver = false;
